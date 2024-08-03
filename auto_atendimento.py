@@ -4,24 +4,14 @@ from telethon import TelegramClient, events
 from config import API_ID, API_HASH
 from handlers.menu_handler import handle_option
 from handlers.auto_atendimento_handler import auto_atendimento_menu, handle_auto_atendimento_event
-from handlers.falar_com_atendente import (
-    falar_com_atendente,
-    encerrar_atendimento,
-    handle_message,
-    handle_atendimento_confirmacao,
-    atendimento_ativo,
-    atendimento_confirmacao,
-    atendimento_auto_off,
-    CANAL_LOG_ID,
-    user_state
-)
+from handlers.falar_com_atendente import falar_com_atendente, encerrar_atendimento, handle_message, handle_atendimento_confirmacao, atendimento_ativo, atendimento_confirmacao, atendimento_auto_off, CANAL_LOG_ID, user_state
 from datetime import datetime, timedelta
 import requests
 from collections import deque
 from keywords import keywords
 
 # Configuração do logger
-logging.basicConfig(level=logging.DEBUG)  # Mantido DEBUG para mais detalhes
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Nome do arquivo de sessão
@@ -53,8 +43,6 @@ if is_brazilian_ip():
 
     @client.on(events.NewMessage)
     async def handle_message_event(event):
-        logger.debug("Início do processamento da nova mensagem.")
-        
         # Ignorar mensagens de grupos, canais e bots
         sender = await event.get_sender()
         if event.is_group or event.is_channel or (sender and sender.bot):
@@ -63,8 +51,6 @@ if is_brazilian_ip():
 
         chat_id = event.chat_id
         text = event.raw_text.lower()
-
-        logger.debug(f"Mensagem recebida de {chat_id}: {text}")
 
         # Filtro Anti-Spam
         current_time = datetime.now()
@@ -83,12 +69,13 @@ if is_brazilian_ip():
             await event.reply("🚫 **Você está enviando mensagens muito rapidamente. Por favor, aguarde um pouco antes de enviar mais mensagens.**")
             return
 
+        logger.info(f"Mensagem recebida de {chat_id}: {text}")
+
         last_time = last_message_time.get(chat_id, current_time)
         last_message_time[chat_id] = current_time
 
         # Verificar se é a primeira mensagem do usuário
         if chat_id not in user_state:
-            logger.debug(f"Primeira mensagem recebida do usuário {chat_id}. Definindo estado como 'menu_principal'.")
             user_state[chat_id] = 'menu_principal'
             user = await event.get_sender()
             logger.info(f"Enviando mensagem de boas-vindas para {chat_id} na primeira interação")
@@ -110,7 +97,6 @@ if is_brazilian_ip():
 
         # Enviar menu principal se a última mensagem foi enviada há mais de 48 horas
         if current_time - last_time > timedelta(hours=48):
-            logger.debug(f"Mais de 48 horas desde a última mensagem do usuário {chat_id}. Redefinindo estado para 'menu_principal'.")
             user_state[chat_id] = 'menu_principal'
             user = await event.get_sender()
             logger.info(f"Enviando mensagem de boas-vindas para {chat_id} após período de inatividade")
@@ -132,7 +118,6 @@ if is_brazilian_ip():
 
         # Verificar palavras-chave específicas para saudações, se o auto_atendimento não estiver desativado
         if any(keyword in text for keyword in keywords) and chat_id not in atendimento_auto_off and chat_id not in atendimento_ativo:
-            logger.debug(f"Palavra-chave detectada para saudação. Redefinindo estado para 'menu_principal' para o usuário {chat_id}.")
             user_state[chat_id] = 'menu_principal'
             user = await event.get_sender()
             logger.info(f"Enviando mensagem de boas-vindas para {chat_id} em resposta a saudação")
@@ -152,9 +137,7 @@ if is_brazilian_ip():
             )
             return
 
-        # Fluxo de auto atendimento e menu
         if text == 'menu':
-            logger.debug(f"Comando 'menu' recebido. Resetando para 'menu_principal'.")
             if chat_id in atendimento_ativo or chat_id in atendimento_confirmacao:
                 await encerrar_atendimento(event)
             if chat_id in atendimento_auto_off:
@@ -174,6 +157,7 @@ if is_brazilian_ip():
             )
         elif text == '/encerrar':
             logger.info(f"Comando /encerrar recebido de {chat_id}")
+            # Reseta o estado e remove o atendimento de qualquer lista de atendimento ativo
             user_state.pop(chat_id, None)
             if chat_id in atendimento_auto_off:
                 atendimento_auto_off.remove(chat_id)
@@ -181,19 +165,23 @@ if is_brazilian_ip():
                 atendimento_ativo.pop(chat_id, None)
             if chat_id in atendimento_confirmacao:
                 atendimento_confirmacao.pop(chat_id, None)
-            await event.reply("🔚 **Atendimento encerrado pelo suporte.** 🔚\n")
-            await event.reply("👍 **Obrigado por utilizar nosso serviço. Se precisar de mais ajuda, não hesite em nos contatar novamente.**", parse_mode='md')
+            await event.reply(
+                "🔚 **Atendimento encerrado pelo suporte.** 🔚\n",
+                parse_mode='md'
+            )
+            await event.reply(
+                "👍 **Obrigado por utilizar nosso serviço. Se precisar de mais ajuda, não hesite em nos contatar novamente.**",
+                parse_mode='md'
+            )
         elif chat_id in atendimento_auto_off:
-            logger.debug("Atendimento automático desativado para este chat.")
+            # Auto atendimento desativado para este chat
             return
         elif chat_id in atendimento_ativo:
-            logger.debug("Mensagem recebida enquanto o usuário está em atendimento ativo.")
+            # Permitir que o usuário envie mensagens livremente enquanto está em atendimento
             await handle_message(event)
         elif chat_id in atendimento_confirmacao:
-            logger.debug("Mensagem recebida enquanto o usuário está no processo de confirmação de atendimento.")
             await handle_atendimento_confirmacao(event)
         elif text == '/start':
-            logger.debug(f"Comando '/start' recebido. Definindo estado para 'menu_principal' para o usuário {chat_id}.")
             user_state[chat_id] = 'menu_principal'
             user = await event.get_sender()
             logger.info(f"Enviando mensagem de boas-vindas para {chat_id}")
@@ -212,12 +200,9 @@ if is_brazilian_ip():
                 parse_mode='md'
             )
         elif chat_id in user_state and user_state[chat_id] != 'menu_principal':
-            logger.debug(f"Usuário {chat_id} está no estado {user_state[chat_id]}. Chamada para handle_auto_atendimento_event.")
             await handle_auto_atendimento_event(event, text, user_state)
         else:
-            logger.debug(f"Processando entrada padrão para o texto: {text}")
             if text == '5' or text == 'auto atendimento':
-                logger.info(f"Usuário {chat_id} selecionou Auto Atendimento")
                 user_state[chat_id] = 'auto_atendimento'
                 await auto_atendimento_menu(event)
             elif text == '6' or text == 'falar com atendente':
